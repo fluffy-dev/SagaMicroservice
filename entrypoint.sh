@@ -13,4 +13,8 @@ else
   echo "Skipping Alembic migrations due to DB_RUN_AUTO_MIGRATE flag."
 fi
 
-uvicorn src.app:app --host "$APP_HOST" --port "$APP_PORT" --log-level "debug" --reload --use-colors
+if [ $# -gt 0 ]; then
+  exec "$@"
+else
+  exec uvicorn src.app:app --host "$APP_HOST" --port "$APP_PORT" --log-level "debug" --reload --use-colors
+fi
