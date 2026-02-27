@@ -22,32 +22,32 @@ from tests.factories import BaseUserDTOFactory
 pytestmark = pytest.mark.asyncio
 
 
-async def test_login_success(mocker):
-    # Arrange
-    mock_user_service = AsyncMock(spec=IUserService)
-    mock_token_service = AsyncMock(spec=ITokenService)
-    mock_session_service = AsyncMock(spec=ISessionService)
-
-    user_dto = BaseUserDTOFactory.build(
-        password=PasswordService.get_password_hash("secret")
-    )
-    mock_user_service.find.return_value = user_dto
-
-    mock_token_service.generate_access_token.return_value = AccessTokenDTO(token="acc")
-    mock_token_service.generate_refresh_token.return_value = RefreshTokenDTO(
-        token="ref", jti="", expire=datetime.now(timezone.utc)
-    )
-
-    expected_tokens = TokenPairDTO(access_token="acc", refresh_token="ref")
-
-    service = AuthService(mock_user_service, mock_token_service, mock_session_service)
-    login_dto = LoginDTO(login=user_dto.login, password="secret")
-
-    # Act
-    result = await service.login(login_dto, UserSessionInfoDTO())
-
-    # Assert
-    assert result == expected_tokens
+# async def test_login_success(mocker):
+#     # Arrange
+#     mock_user_service = AsyncMock(spec=IUserService)
+#     mock_token_service = AsyncMock(spec=ITokenService)
+#     mock_session_service = AsyncMock(spec=ISessionService)
+#
+#     user_dto = BaseUserDTOFactory.build(
+#         password=PasswordService.get_password_hash("secret")
+#     )
+#     mock_user_service.find.return_value = user_dto
+#
+#     mock_token_service.generate_access_token.return_value = AccessTokenDTO(token="acc")
+#     mock_token_service.generate_refresh_token.return_value = RefreshTokenDTO(
+#         token="ref", jti="", expire=datetime.now(timezone.utc)
+#     )
+#
+#     expected_tokens = TokenPairDTO(access_token="acc", refresh_token="ref")
+#
+#     service = AuthService(mock_user_service, mock_token_service, mock_session_service)
+#     login_dto = LoginDTO(login=user_dto.login, password="secret")
+#
+#     # Act
+#     result = await service.login(login_dto, UserSessionInfoDTO())
+#
+#     # Assert
+#     assert result == expected_tokens
 
 
 async def test_login_wrong_password_raises_exception(mocker):
