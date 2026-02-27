@@ -23,7 +23,7 @@ class MyCustomSource(EnvSettingsSource):
         ]:
             if value:
                 return value.split(",")
-        return json.loads(value) if value else value
+        return value
 
 
 class Settings(BaseSettings):
