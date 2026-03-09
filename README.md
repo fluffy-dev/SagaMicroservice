@@ -1,11 +1,13 @@
 # Saga Pattern Microservice (E-Commerce Checkout)
 
-This project extends a clean-architecture FastAPI template to implement an orchestrated **Saga Pattern** for an e-commerce checkout workflow. The checkout spans multiple dependent domain operations (Payment, Inventory, and Shipping).
+This project extends a clean-architecture FastAPI template to implement an orchestrated **Saga Pattern** for an e-commerce checkout workflow. The checkout spans multiple dependent domain operations (Payment, Inventory, and Shipping) with **Kafka event streaming** and **Redis caching/idempotency**.
 
 ## Architectural Design
 
 The solution is crafted around strict SOLID and Dependency Injection parameters:
-- **`src/libs/saga`**: A generic and reusable compensation-based workflow engine.
+- **`src/libs/saga`**: A generic and reusable compensation-based workflow engine with optional event emission.
+- **`src/libs/event_bus`**: A protocol-driven Kafka integration for asynchronous domain event publishing and consuming.
+- **`src/libs/cache`**: A protocol-driven Redis integration for caching and idempotency.
 - **`src/checkout`**: The domain implementation for the e-commerce transaction operations.
 
 ### The Saga Orchestrator (`libs/saga`)
@@ -14,23 +16,42 @@ A pure Saga orchestrator tracks state via an `ISagaStep[TContext]` protocol. Eac
 1. `execute(context)`: Forward operational logic.
 2. `compensate(context)`: Backward rollback or corrective logic to undo previous effects.
 
-The `SagaOrchestrator` runs an ordered list of `ISagaStep`s. If any step throws an exception during `execute()`, the Orchestrator safely catches the failure and traverses backward iteratively through the *successfully executed* steps to trigger their `compensate()` methods in strictly reverse order. This guarantees data consistency across distributed boundaries or complex sequences without two-phase commits.
+The `SagaOrchestrator` runs an ordered list of `ISagaStep`s. If any step throws an exception during `execute()`, the Orchestrator safely catches the failure and traverses backward iteratively through the *successfully executed* steps to trigger their `compensate()` methods in strictly reverse order.
 
-### The Checkout Workflow (`checkout/service/steps.py`)
+When configured with an `IEventPublisher`, the orchestrator emits structured lifecycle events (`saga.step.started`, `saga.step.completed`, `saga.step.failed`, `saga.compensation.started`) for observability.
+
+### Event Bus (`libs/event_bus`)
+
+A reusable, domain-agnostic event bus abstraction:
+- **`IEventPublisher`** protocol with `publish(topic, key, value)`
+- **`KafkaEventPublisher`** wraps `aiokafka.AIOKafkaProducer` with JSON serialization
+- **`KafkaEventConsumer`** abstract base class with a pluggable `process_message()` hook
+
+### Cache Layer (`libs/cache`)
+
+A reusable async cache abstraction:
+- **`ICacheBackend`** protocol with `get`, `set`, `delete`, `exists` methods
+- **`RedisCacheBackend`** implements the protocol using `redis.asyncio`
+
+### The Checkout Workflow (`checkout/service`)
 
 The three steps mapped to the Orchestrator for checkout:
 - **`PaymentStep`**: Deducts funds. Compensates by triggering a refund.
 - **`InventoryStep`**: Reserves unit stock. Compensates by releasing stock.
 - **`ShippingStep`**: Books a delivery. Compensates by unbooking or cancelling delivery.
 
-The Orchestrator's dependency graph guarantees that if `ShippingStep` fails, we run `InventoryStep.compensate()` and then `PaymentStep.compensate()`. 
+**Production features:**
+- **Idempotency**: Duplicate checkout requests within the TTL window return a cached result from Redis.
+- **Event publishing**: Domain events (`checkout.completed`, `checkout.failed`) are published to Kafka.
+- **Order caching**: Completed orders are cached in Redis for fast `GET /checkout/{order_id}` lookups.
+- **Background consumer**: A `CheckoutEventConsumer` processes checkout events asynchronously.
 
 ### State Persistence & Clean Architecture
 
 The `checkout` module adheres strictly to the existing template's **Layered Onion Architecture**:
 - **Entity/DTO**: Explicit `Pydantic` mapping blocks data coupling between models and routers.
 - **Repository Pattern**: `OrderRepository` interacts strictly with SQLAlchemy `OrderModel`. It abstracts raw SQL constructs away from services.
-- **Dependency Injection (`Depends`)**: The `CheckoutService`, `OrderRepository`, and FastApi routes are lazily instantiated with scoped `AsyncSession` variables using `Depends`. This ensures our transactional boundaries span precisely the request scope.
+- **Dependency Injection (`Depends`)**: The `CheckoutService`, `OrderRepository`, event publisher, cache backend, and FastApi routes are lazily instantiated with scoped `AsyncSession` variables using `Depends`. This ensures our transactional boundaries span precisely the request scope.
 
 ## Running the Application
 
@@ -41,7 +62,7 @@ This is Docker-composed to run easily on distributed environments.
 ```bash
 docker-compose up -d --build
 ```
-This spins up the API container and the underlying Postgres SQL instances.
+This spins up the API container, PostgreSQL, Kafka (KRaft mode), and Redis.
 
 #### 2. Run Database Migrations
 Create the explicit `orders` and `users` tables:
@@ -60,12 +81,23 @@ Go to the interactive API docs generated by FastAPI to trigger real manual flows
 
 **Swagger UI:** [http://localhost:8000/docs#/Checkout](http://localhost:8000/docs#/Checkout)
 
+#### POST `/v1/checkout/` — Initiate a checkout saga:
 ```json
 {
   "user_id": 1,
   "item_id": "string",
   "quantity": 0,
   "price": 0,
-  "fail_at_step": "ShippingStep" // Try adding this to see the compensation kick in!
+  "fail_at_step": "ShippingStep"
 }
+```
+
+#### GET `/v1/checkout/{order_id}` — Retrieve order from cache/DB:
+```bash
+curl http://localhost:8000/v1/checkout/1
+```
+
+#### View Kafka events in container logs:
+```bash
+docker-compose logs -f api
 ```
